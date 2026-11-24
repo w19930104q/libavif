@@ -71,6 +71,11 @@ The changes are relative to the previous release, unless the baseline is specifi
   although libaom and libavm invalidate it when the next sample is decoded.
 * Default gain map matrix coefficients to BT.601 (6) instead of unspecified (2)
   in avifgainmaputil combine and in avifenc when converting a JPEG+gain map.
+* Fix avifImageCopy() destroying the destination image planes when the source
+  image has an incomplete plane structure (for example a 4:2:0 image with
+  missing chroma planes): the source is now fully validated and the new planes
+  allocated before the destination is replaced, so a failed copy leaves the
+  destination image untouched.
 
 ## [1.4.2] - 2026-05-26
 

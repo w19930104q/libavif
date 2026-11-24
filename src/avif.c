@@ -253,8 +253,45 @@ avifResult avifImageCopy(avifImage * dstImage, const avifImage * srcImage, avifP
     // Disallow self copy even though it could be supported easily. Self copy is
     // unlikely to be needed, so it almost always indicates a programming error.
     AVIF_CHECKERR(dstImage != srcImage, AVIF_RESULT_INVALID_ARGUMENT);
+
+    // Validate the source image structure and prepare the new planes on a
+    // scratch image before touching dstImage. If anything fails, dstImage is
+    // left completely untouched so a failed copy cannot destroy a previously
+    // valid destination image.
+    avifImage newPlanes;
+    avifImageSetDefaults(&newPlanes);
+    newPlanes.width = srcImage->width;
+    newPlanes.height = srcImage->height;
+    newPlanes.depth = srcImage->depth;
+    newPlanes.yuvFormat = srcImage->yuvFormat;
+
+    if ((planes & AVIF_PLANES_YUV) && srcImage->yuvPlanes[AVIF_CHAN_Y]) {
+        if ((srcImage->yuvFormat != AVIF_PIXEL_FORMAT_YUV400) &&
+            (!srcImage->yuvPlanes[AVIF_CHAN_U] || !srcImage->yuvPlanes[AVIF_CHAN_V])) {
+            return AVIF_RESULT_INVALID_ARGUMENT;
+        }
+        const avifResult allocationResult = avifImageAllocatePlanes(&newPlanes, AVIF_PLANES_YUV);
+        if (allocationResult != AVIF_RESULT_OK) {
+            avifImageFreePlanes(&newPlanes, AVIF_PLANES_ALL);
+            return allocationResult;
+        }
+    }
+    if ((planes & AVIF_PLANES_A) && srcImage->alphaPlane) {
+        const avifResult allocationResult = avifImageAllocatePlanes(&newPlanes, AVIF_PLANES_A);
+        if (allocationResult != AVIF_RESULT_OK) {
+            avifImageFreePlanes(&newPlanes, AVIF_PLANES_ALL);
+            return allocationResult;
+        }
+    }
+    avifImageCopySamples(&newPlanes, srcImage, planes);
+
+    // The source is valid and the new planes are ready: only now is the
+    // destination image replaced. The scratch planes are transferred to
+    // dstImage (deep copy: they are fresh allocations, independent from the
+    // source planes).
     avifImageFreePlanes(dstImage, AVIF_PLANES_ALL);
     avifImageCopyNoAlloc(dstImage, srcImage);
+    avifImageStealPlanes(dstImage, &newPlanes, AVIF_PLANES_ALL);
 
     AVIF_CHECKRES(avifImageSetProfileICC(dstImage, srcImage->icc.data, srcImage->icc.size));
 
@@ -262,24 +299,6 @@ avifResult avifImageCopy(avifImage * dstImage, const avifImage * srcImage, avifP
     AVIF_CHECKRES(avifImageSetMetadataXMP(dstImage, srcImage->xmp.data, srcImage->xmp.size));
 
     AVIF_CHECKRES(avifImageCopyProperties(dstImage, srcImage));
-
-    if ((planes & AVIF_PLANES_YUV) && srcImage->yuvPlanes[AVIF_CHAN_Y]) {
-        if ((srcImage->yuvFormat != AVIF_PIXEL_FORMAT_YUV400) &&
-            (!srcImage->yuvPlanes[AVIF_CHAN_U] || !srcImage->yuvPlanes[AVIF_CHAN_V])) {
-            return AVIF_RESULT_INVALID_ARGUMENT;
-        }
-        const avifResult allocationResult = avifImageAllocatePlanes(dstImage, AVIF_PLANES_YUV);
-        if (allocationResult != AVIF_RESULT_OK) {
-            return allocationResult;
-        }
-    }
-    if ((planes & AVIF_PLANES_A) && srcImage->alphaPlane) {
-        const avifResult allocationResult = avifImageAllocatePlanes(dstImage, AVIF_PLANES_A);
-        if (allocationResult != AVIF_RESULT_OK) {
-            return allocationResult;
-        }
-    }
-    avifImageCopySamples(dstImage, srcImage, planes);
 
     if (srcImage->gainMap) {
         if (!dstImage->gainMap) {
